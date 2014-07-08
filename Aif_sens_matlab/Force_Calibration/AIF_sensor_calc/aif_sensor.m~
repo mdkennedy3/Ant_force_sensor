@@ -1,0 +1,273 @@
+function [pos_prof , vel_prof, cent_traj] = aif_sensor(Name_of_movie, movie_extension, calibrated_image, Calib_matrix, kc, FPS, tag_edge_length, Frame_rate_collect, plot_and_save_tag_data, save_tag_pos_video, save_tag_pos_data, save_tag_vel_data, save_cent_trajectory,plot_cent_trajectory)
+
+
+%% Sensor Deflection from Video
+%Description:
+%This code is for tracking deflection of sensors from video
+
+%Developed by: Monroe Kennedy
+%Date: 7/29/13
+%Reference: April Tags code: http://people.csail.mit.edu/kaess/apriltags/
+
+
+
+
+%% Setup:
+obj = VideoReader([Name_of_movie,movie_extension])
+Cal_img = imread(calibrated_image);
+
+Cal_img = rgb2gray(Cal_img);
+
+%Undistort Cal_img
+Cal_img = undistort(Cal_img, Calib_matrix,  kc); %
+
+[tags p1 p2 p3 p4 p5] = dapriltag(Cal_img);
+Cal_info = [tags;...
+    p1;...
+    p2;...
+    p3;...
+    p4;...
+    p5];
+
+
+
+
+%% This is for extracting video frames
+
+%Place the tags of interest here
+
+Tags_of_interest = [2;...   %tag center
+    98;...  %tag1
+    62;...  %tag2
+    50;...  %tag3
+    38];    %tag4
+
+%% Find the number of frames, and find acceptable images for comparison
+
+dx_ends = [];
+def_centers = cellmat;
+Cal_img_info = cellmat;
+
+%more accurate
+%frame_count = read(obj); %This is apparently more accurate than .NumberofFrames, however takes longer     nFrames = obj.NumberOfFrames;
+% nFrames = size(frame_count,4);
+
+nFrames = obj.NumberOfFrames;
+divise = Frame_rate_collect;
+nFrames = floor(nFrames/divise);
+
+
+video = cellmat;
+
+sensor_data = cellmat;
+sensor_def_centers_data = cellmat;
+sensor_Cal_img_info_data = cellmat;
+%for velocity
+Tags_of_interest_init = [];
+flag = 0; %flag to indicate first velocity has been found
+
+vel_prof = cellmat;
+acc_prof = cellmat;
+
+cent_traj = [];
+
+for i = 1:nFrames
+    
+    I = read(obj,floor(i*divise));
+    I = rgb2gray(I);
+    
+    
+    %% Undistort Image
+    %undistort I and calimage
+    %sensor.img = undistort(Image_grey, Cal_mat, distortion_coeff);
+    I = undistort(I, Calib_matrix,  kc); %
+    
+    %%
+    [tags p1 p2 p3 p4 p5] = dapriltag(I);
+    
+    %%%%%%%%%%%%%check to see if tags of interest are present%%%%%%%%%%%
+    sensor_present = [];
+    sensor = [];
+    
+    for k = 1:length(Tags_of_interest)
+        if ~isempty(find(tags == Tags_of_interest(k)))
+            sensor_present(end+1) = find(tags == Tags_of_interest(k));
+            sensor(end+1) = tags(sensor_present(end));   %note that sensor is aligned as Tags_of_interest, but may not have all in set, but is ordered
+        end
+    end
+    
+    
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    
+    if (~isempty(tags) && length(sensor_present) >= 2 && sensor(1) == Tags_of_interest(1))
+        
+        
+        Def_info = [tags;...
+            p1;...
+            p2;...
+            p3;...
+            p4;...
+            p5];
+        
+        %% Place velocity code here
+        
+        F_init = i-1;
+        F_final = i;
+        
+        if flag == 0
+            Tags_of_interest_init = sensor;
+            def_img_info_init_frame = Def_info;
+            flag = 1;
+        else
+            
+            %update tags of interest
+            Tags_of_interest_final = sensor;
+            def_img_info_final_frame = Def_info;
+            
+            %Find velocity profile which include vel of cent tag, ang vel,
+            %and corresponding frame
+            [velocity_prof] = velocity_profile(def_img_info_init_frame,F_init, def_img_info_final_frame,F_final, tag_edge_length, Tags_of_interest_init,Tags_of_interest_final, FPS);
+            
+            if size(vel_prof,2) == 1 && size(vel_prof{1},1) == 1
+                vel_prof{end} = velocity_prof;
+            else
+                vel_prof{end+1} = velocity_prof;
+            end
+            
+            %now set init tags to latest
+            Tags_of_interest_init = sensor;
+            def_img_info_init_frame = Def_info;
+            
+        end
+        
+        
+        %% Internal deflection
+        
+        video{end+1,1} = I;
+        
+        dx_ends = [];
+        
+        [dx_ends(end+1:end+2,:),def_centers{end+1}, Cal_img_info{end+1},Def_im_back] = deform_sens(Cal_img, Cal_info, Def_info, tag_edge_length, sensor);
+        
+        video{end,2} = Def_im_back;
+        
+        sensor_data{1,end+1} = i*divise;%This is the frame being looked at in the movie
+        
+        sensor_def_centers_data{1,end+1} =  i*divise;%This is the frame being looked at in the movie
+        
+        sensor_Cal_img_info_data{1,end+1} =  i*divise;%This is the frame being looked at in the movie
+        %%%%%%%%%%%%%%%%%%%%Problem%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        
+%         if size(sensor,2) <= 4
+%             
+%             disp('look here')
+%         end
+        
+        
+        filler = 0; %this variable keeps track of how many times you filled a row
+        for j = 2:size(sensor,2)
+            
+            index = find(Tags_of_interest == sensor(j)); %found where the first tag is (other than center in tags of interest)
+            
+            if sensor(j) ~= Tags_of_interest(j+filler)
+                
+                for k = j:(index-1)
+                    sensor_data{j,end} = [];
+                    
+                    sensor_def_centers_data{j,end} = [];
+                    
+                    filler = filler + 1;
+                end
+                
+                %then add that value
+                sensor_data{j+1,end} = dx_ends(:,j);
+                sensor_def_centers_data{j+1,end} = def_centers{end}(:,j);
+                sensor_Cal_img_info_data{j+1,end} =
+            else
+                
+                sensor_data{j + filler,end} = dx_ends(:,j);
+                sensor_def_centers_data{j + filler,end} = def_centers{end}(:,j);
+                 sensor_Cal_img_info_data{j + filler,end} =
+            end
+        end
+        %A much easier method would be to find the index, then simply for
+        %last line have sensor_data(index,end) = dx_ends(:,j)
+    
+    
+    %% Save current center tag position in field of view for center trajectory
+
+    cent_traj = [cent_traj,  Def_im_back(2:end,1)]; %save center position in every frame (p1, as this is the location of the center of the tag, and as it is arranged this is the center tags 'center')
+    
+    end
+    %%  Report Percent Complete
+    
+    percent_complete = i/(nFrames)*100
+end
+
+
+
+%% Now find the Net Velocity profile
+
+%Make matrix of velocity
+velocity_prof_temp_frames = cell2mat(vel_prof);
+
+tag_velocities_separate = cellmat;
+
+for i = 1:length(Tags_of_interest)
+    tag_velocities_separate{1,i} = Tags_of_interest(i);
+end
+
+
+for i = 1:size(velocity_prof_temp_frames,2)
+    
+    ind = find(Tags_of_interest' == velocity_prof_temp_frames(1,i)); %this determines which tag column this should belong to
+    
+    if size(tag_velocities_separate,1) == 1
+        tag_velocities_separate{2,ind} = [velocity_prof_temp_frames(:,i)];
+    else
+        tag_velocities_separate{2,ind}(:,end+1) = [velocity_prof_temp_frames(:,i)];
+    end
+end
+
+
+%% Now give graph for deflection over frames
+if plot_and_save_tag_data == 1
+    [str] = plot_sensor_data(sensor_data,tag_velocities_separate,divise,Name_of_movie,'median_filt') %Type is type of filtering: 'impulse' or 'median_filt'
+end
+
+%% Now plot trajectory of center tag
+
+if plot_cent_trajectory == 1
+    [str] = plot_center_tag_trajectory(cent_traj,obj.Height,obj.Width,tag_edge_length,Name_of_movie)
+end
+
+%% Now save trajectory of center tag
+
+if save_cent_trajectory == 1
+  save([Name_of_movie, '_cent_pixel_traj_data'],'cent_traj','-v7.3')
+end
+
+%% Save video:
+if save_tag_pos_video == 1
+    [str] = ant_sensor_video_saver(video, sensor_def_centers_data, def_centers,Cal_img_info,Cal_img,Name_of_movie)
+end
+
+%% Save data if desired:
+if save_tag_pos_data == 1
+    save([Name_of_movie, '_sensor_data'],'sensor_data','-v7.3')
+end
+
+if save_tag_vel_data == 1
+    save([Name_of_movie, '_sensor_vel_data'],'tag_velocities_separate','-v7.3')
+end
+
+
+
+
+%% Return:
+
+pos_prof = sensor_data;
+vel_prof = tag_velocities_separate;
+cent_traj = cent_traj; %note that pixels in matlab have (0,0) in top left corner of frame, hence y will be 'flipped' when plotted
+
+
